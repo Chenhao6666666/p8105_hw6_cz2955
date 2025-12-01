@@ -245,8 +245,7 @@ theme_minimal()
 
 ```
 
-
-
+Ans: As the RMSE of the interact model is the smallest which is showed in plot, which indicates the best out-of-sample predictive performance among the three models.
 
 
 
