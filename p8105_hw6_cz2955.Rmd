@@ -1,0 +1,267 @@
+---
+title: "p8105_hw6_cz2955"
+output: github_document
+date: "2025-11-30"
+---
+
+```{r setup, include=FALSE}
+library(tidyverse)
+library(modelr) 
+library(rsample)
+library(broom)  
+library(purrr)
+library(p8105.datasets)
+library(ggplot2)
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Q1
+### Data
+```{r}
+killdata<-read_csv("homicide_data.csv")
+head(killdata)
+```
+
+### Cleandata
+```{r}
+clean_data <- killdata %>%
+  mutate(city_state = paste0(city, ", ", state)) %>%
+  mutate(solved = if_else(disposition == "Closed by arrest", 1, 0)) %>%
+  filter(!(city_state %in% c("Dallas, TX", "Phoenix, AZ", 
+                             "Kansas City, MO", "Tulsa, AL"))) %>%
+  filter(victim_race %in% c("White", "Black")) %>%
+  mutate(victim_age = as.numeric(victim_age))
+clean_data
+```
+
+### Baltimore, MD
+```{r}
+Baltimore <- clean_data %>%
+  filter(city == "Baltimore", state == "MD")
+Baltimore
+
+model_balt <- glm(
+  solved ~ victim_age + victim_sex + victim_race,
+  data = Baltimore,
+  family = binomial(link = "logit")
+)
+model_balt
+tidy_model <- tidy(model_balt, conf.int = TRUE, exponentiate = TRUE)
+tidy_model
+male_or <- tidy_model %>% 
+  filter(term == "victim_sexMale") %>%
+  select(term, estimate, conf.low, conf.high)
+male_or         
+cat("Adjusted OR (Male vs Female):", male_or$estimate, "\n")
+cat("95% CI: (", male_or$conf.low, ",", male_or$conf.high,")", "\n")
+
+```
+
+Ans: Using logistic regression with homicide resolution as the outcome and victim age, sex, and race as predictors, the adjusted odds ratio comparing male victims to female victims, while holding age and race constant, is: the Adjusted OR is `r male_or$estimate[[1]]` and the 95% CI is (`r male_or$conf.low[[1]]`, `r male_or$conf.high[[1]]`). This indicates that, given the same age and race, homicides involving male victims are less likely to be solved compared to those involving female victims.
+
+### All cities
+```{r}
+city_OR <- clean_data %>%
+  nest(data = -c(city, state)) %>%
+  mutate(
+    model = purrr::map(data, ~ glm(
+      solved ~ victim_age + victim_sex + victim_race,
+      data = .x,
+      family = binomial()
+    )),
+    tidy_res = map(model, ~ tidy(.x, conf.int = TRUE, exponentiate = TRUE)),
+    male_or = purrr::map(tidy_res, ~ .x %>%
+                    filter(term == "victim_sexMale") %>%
+                    select(estimate, conf.low, conf.high))
+  ) %>%
+  unnest(male_or) %>%
+  select(city, state, estimate, conf.low, conf.high) %>% 
+  arrange(city)
+city_OR 
+```
+
+### Plot
+```{r}
+city_OR <- city_OR %>%
+  arrange(estimate) %>%
+  mutate(city = factor(city, levels = city))
+
+ggplot(city_OR, aes(x = city, y = estimate)) +
+  geom_point(color = "blue", size = 2) +
+  geom_errorbar(aes(ymin = conf.low, ymax = conf.high), width = 0.3, color = "blue") +
+  geom_hline(yintercept = 1, linetype = "dashed", color = "red") + 
+  coord_flip() +  
+  labs(
+    x = "City",
+    y = "Adjusted OR (Male vs Female)",
+    title = "Adjusted Odds Ratios for Solving Homicides by City",
+    subtitle = "OR < 1: Male victims less likely to be solved; OR > 1: Male victims more likely"
+  ) +
+  theme_minimal(base_size = 10)
+```
+
+Ans: Form the plot we know that the OR of most cities are less than 1, which means male victims less likely to be solved than female in many cities. As most OR values fall between 0.5 and 1.0, the clearance rate for male victim cases is generally lower across cities compared to female victim cases. This leads us to the overall conclusion that, within this dataset, homicide cases involving female victims typically have a higher probability of being solved.
+
+
+## Q2
+### Import Data
+```{r}
+library(p8105.datasets)
+data("weather_df")
+```
+### Ready
+```{r}
+set.seed(123)
+
+boot_fn <- function(data) {
+  
+  boot_sample <- data %>% 
+    slice_sample(n = nrow(data), replace = TRUE)
+  
+  fit <- lm(tmax ~ tmin + prcp, data = boot_sample)
+  
+  r2 <- glance(fit)$r.squared
+  
+  coef_tbl <- tidy(fit)
+  beta1 <- coef_tbl$estimate[coef_tbl$term == "tmin"]
+  beta2 <- coef_tbl$estimate[coef_tbl$term == "prcp"]
+  
+  tibble(
+    r2 = r2,
+    beta1_beta2 = beta1 / beta2
+  )
+}
+
+weather_cleaned_df <- weather_df %>% 
+  drop_na()
+
+boot_results <- replicate(5000, boot_fn(weather_cleaned_df), simplify = FALSE) %>%
+bind_rows()
+head(boot_results)
+summary(boot_results$r2)
+summary(boot_results$beta1_beta2)
+
+```
+
+### r^2
+```{r}
+library(ggplot2)
+
+boot_results %>%
+  ggplot(aes(x = r2)) +
+  geom_histogram(bins = 50) +
+  labs(title = "Bootstrap Distribution of R^2")   
+quantile(boot_results$r2, c(0.025, 0.975))
+```
+
+Ans:Here is the plot of distribution for R^2. We can see in most of the Beta Ratio estimate is between 0.93 to 0.95, and the most account is approximate around 0.942. Moreover, the 95% Ci is (0.9344957 , 0.9467211).
+
+### Beta
+```{r}
+boot_results %>%
+  ggplot(aes(x = beta1_beta2)) +
+  geom_histogram(bins = 50) +
+  labs(title = "Bootstrap Distribution of Beta1 / Beta2")
+quantile(boot_results$beta1_beta2, c(0.025, 0.975))
+```
+
+Ans:Here is the plot of distribution for Beta1 / Beta2. We can see in most of the Beta Ratio estimate is between -300 to -100, and the most account is approximate around -175. Moreover, the 95% Ci is (-274.7945 , -125.4836 ).
+
+## Q3
+### Data
+```{r}
+birthweight<-read_csv("birthweight.csv")
+birth_df <- birthweight %>% 
+  mutate(
+    babysex = factor(babysex, labels = c("Male", "Female")),
+    frace = factor(frace),
+    mrace = factor(mrace),
+    malform = factor(malform)
+  ) %>%
+  drop_na(bwt, bhead, blength, gaweeks, delwt, ppwt, wtgain)
+```
+### Model
+```{r}
+main_model <- lm(
+  bwt ~ ppwt + gaweeks + wtgain + babysex + mrace,
+  data = birth_df
+)
+
+summary(main_model)
+```
+### Plot
+```{r}
+birth_df <- birth_df %>%
+  add_predictions(main_model) %>%
+  add_residuals(main_model)
+
+ggplot(birth_df, aes(x = pred, y = resid)) +
+  geom_point(alpha = 0.5) +
+  geom_hline(yintercept = 0, color = "red", linetype = "dashed") +
+  labs(x = "Fitted values", y = "Residuals",
+       title = "Residuals vs Fitted Values") +
+  theme_minimal()
+
+```
+### Other models
+```{r}
+cv_df <- crossv_mc(birth_df, 100) |> 
+  mutate(
+    train = map(train, as_tibble),
+    test  = map(test, as_tibble)
+  )
+
+cv_df <- cv_df |> 
+  mutate(
+    mod_main      = map(train, ~ lm(bwt ~ ppwt + gaweeks + wtgain + babysex + mrace, data = .x)),
+    mod_simple    = map(train, ~ lm(bwt ~ blength + gaweeks, data = .x)),
+    mod_interact  = map(train, ~ lm(bwt ~ (bhead + blength + babysex)^3, data = .x))
+  )
+
+cv_df <- cv_df |> 
+  mutate(
+    rmse_main      = map2_dbl(mod_main, test, ~ sqrt(mean((.y$bwt - predict(.x, .y))^2))),
+    rmse_simple    = map2_dbl(mod_simple, test, ~ sqrt(mean((.y$bwt - predict(.x, .y))^2))),
+    rmse_interact  = map2_dbl(mod_interact, test, ~ sqrt(mean((.y$bwt - predict(.x, .y))^2)))
+  )
+
+cv_df |>
+select(starts_with("rmse")) |>
+pivot_longer(
+everything(),
+names_to = "model",
+values_to = "rmse",
+names_prefix = "rmse_"
+) |>
+mutate(model = fct_inorder(model)) |>
+ggplot(aes(x = model, y = rmse)) +
+geom_violin(fill = "lightblue", alpha = 0.6) +
+labs(
+title = "Cross-Validation RMSE Comparison",
+x = "Model",
+y = "RMSE"
+) +
+theme_minimal()
+
+```
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
